@@ -136,7 +136,7 @@ const RAW_TICKETS = [
   }
 ];
 
-// Fallback drafts used when no DeepSeek key is configured or the call fails.
+// Drafts used by the NOTIFY step, keyed by case state.
 const TEMPLATES = {
   'Under Investigation': (t) => `Hi ${t.customer} team — quick update on ${t.number}. Our engineers are actively investigating the issue you reported (${t.shortDescription.toLowerCase()}) and have identified early findings guiding next steps. We know this is impacting your operations and are treating it with priority. We'll continue investigating and follow up as soon as we have concrete findings to share. Thank you for your patience while we work through this.`,
   'Awaiting Customer Logs': (t) => `Hi ${t.customer} team — update on ${t.number}. We're continuing to work through the issue affecting ${t.shortDescription.toLowerCase()}. A bit more information from your side would help us narrow things down quickly — recent logs or examples are ideal. Once received, we'll be able to move faster toward resolution. We appreciate your partnership here and will keep you posted.`,
@@ -171,36 +171,6 @@ function badgeStyleFor(type) {
 }
 
 // ---------------------------------------------------------------------------
-// DeepSeek — the NOTIFY step drafts the customer update live through the
-// /api/draft proxy. The API key lives only in the server environment
-// (Vercel env var in production, .env via dev-server.py locally).
-// ---------------------------------------------------------------------------
-function buildPrompt(t) {
-  const workNotes = t.workNotes.map(n => `- (${n.time}) ${n.text}`).join('\n');
-  const recentActivity = t.activity.slice(0, 4).map(a => `- (${a.time}) ${a.author}: ${a.text}`).join('\n');
-  return {
-    system: "You are ENU Guardian, an automated support agent for Wiser, a contact-center SaaS platform. You draft short, professional, reassuring customer-facing status updates for open support cases so the customer never feels forgotten. Write exactly one paragraph of 60-110 words, plain text only: no subject line, no signature, no markdown, no bullet points. Start with 'Hi {customer} team'. Reference the case number once. Be honest about the current state, concrete about what happens next, and never promise exact dates.",
-    user: `Draft the customer update for this case:\nCase number: ${t.number}\nCustomer: ${t.customer}\nPriority: ${t.priority}\nCurrent state: ${t.state}\nIssue: ${t.shortDescription}\nInternal work notes (do not reveal sensitive internals verbatim):\n${workNotes}\nRecent activity:\n${recentActivity}`
-  };
-}
-
-async function draftViaProxy(t) {
-  const res = await fetch('/api/draft', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildPrompt(t))
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try { const j = await res.json(); if (j?.error) detail = j.error; } catch (e) { /* keep HTTP status */ }
-    throw new Error(detail);
-  }
-  const data = await res.json();
-  if (!data?.text) throw new Error('empty completion');
-  return data.text;
-}
-
-// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 class App extends Component {
@@ -216,24 +186,12 @@ class App extends Component {
       filterPriority: 'All',
       filterState: 'All',
       filterLogType: 'All',
-      showInfo: false,
-      serverLive: false
+      showInfo: false
     };
   }
 
   componentDidMount() {
     this.addLog('MONITOR', `ENU Guardian online — watching ${this.state.tickets.length} active Wiser cases.`);
-    // Confirm the DeepSeek proxy is up; the key never reaches the browser.
-    fetch('/api/draft').then(r => r.ok ? r.json() : null).then(j => {
-      if (j?.configured) {
-        this.setState({ serverLive: true });
-        this.addLog('MONITOR', 'DeepSeek connected — NOTIFY drafts every customer update live.');
-      } else {
-        this.addLog('MONITOR', 'DeepSeek unavailable — check the DEEP_SEEK_API_KEY server variable.');
-      }
-    }).catch(() => {
-      this.addLog('MONITOR', 'DeepSeek unavailable — check the DEEP_SEEK_API_KEY server variable.');
-    });
     this._ticks = 0;
     this._interval = setInterval(() => {
       if (this.state.paused) return;
@@ -316,29 +274,19 @@ class App extends Component {
     }, delay);
   }
 
-  async runNotify(ticketId) {
+  runNotify(ticketId) {
     const t = this.state.tickets.find(x => x.id === ticketId);
     if (!t) return;
     this.updateTicket(ticketId, { agentState: 'notifying' });
-    this.addExecutionStep(ticketId, 'NOTIFY', `Drafting customer-facing update for ${t.number} via DeepSeek...`);
-    const minDelay = new Promise(r => setTimeout(r, 1100));
-    let text = null;
-    let source = 'template';
-    try {
-      text = await draftViaProxy(t);
-      source = 'deepseek';
-    } catch (err) {
-      this.addLog('NOTIFY', `DeepSeek call failed (${err.message}) — using emergency fallback draft for ${t.number}.`, ticketId);
-    }
-    await minDelay;
-    if (!text) text = (TEMPLATES[t.state] || TEMPLATES['Under Investigation'])(t);
-    this.postUpdate(ticketId, text, source);
+    this.addExecutionStep(ticketId, 'NOTIFY', `Drafting customer-facing update for ${t.number}...`);
+    setTimeout(() => this.postUpdate(ticketId), 1100);
   }
 
-  postUpdate(ticketId, text, source) {
-    if (this.state.paused) { setTimeout(() => this.postUpdate(ticketId, text, source), 500); return; }
+  postUpdate(ticketId) {
+    if (this.state.paused) { setTimeout(() => this.postUpdate(ticketId), 500); return; }
     const t = this.state.tickets.find(x => x.id === ticketId);
     if (!t) return;
+    const text = (TEMPLATES[t.state] || TEMPLATES['Under Investigation'])(t);
     const entryId = Date.now() + Math.random();
     const entry = { id: entryId, author: 'ENU Guardian (automated)', text, time: 'just now', isAgent: true, entering: true };
     const newDeadline = Date.now() + (randomBetween(60, 240) * 1000) / DEMO_SPEED_MULTIPLIER;
@@ -347,9 +295,7 @@ class App extends Component {
       deadline: newDeadline,
       activity: [entry, ...t.activity]
     });
-    this.addExecutionStep(ticketId, 'NOTIFY', source === 'deepseek'
-      ? `Posted DeepSeek-drafted update to ${t.number} activity stream — ENU timer reset.`
-      : `Posted automated update to ${t.number} activity stream — ENU timer reset.`);
+    this.addExecutionStep(ticketId, 'NOTIFY', `Posted automated update to ${t.number} activity stream — ENU timer reset.`);
     this.setState(s => ({ metrics: { breaches: s.metrics.breaches + 1, updates: s.metrics.updates + 1 } }));
     setTimeout(() => {
       this.setState(s => ({
@@ -487,12 +433,6 @@ class App extends Component {
             <span style=${{ width: '7px', height: '7px', borderRadius: '50%', background: 'currentColor', animation: statusPill.dotAnim }}></span>
             ${statusPill.label}
           </div>
-          <div style=${{
-            padding: '9px 16px', borderRadius: '8px', border: '1px solid oklch(82% 0.012 250)',
-            background: this.state.serverLive ? 'oklch(94% 0.04 165)' : 'transparent',
-            color: this.state.serverLive ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
-            fontSize: '13px', fontWeight: 600, fontFamily: 'inherit'
-          }}>${this.state.serverLive ? 'DeepSeek: Live' : 'DeepSeek: Connecting…'}</div>
           <button onClick=${() => this.setState(s => ({ showInfo: !s.showInfo }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">How it works</button>
           <button onClick=${() => this.setState(s => ({ paused: !s.paused }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:oklch(96% 0.006 250); color:oklch(28% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">${this.state.paused ? 'Resume Demo' : 'Pause Demo'}</button>
           <button onClick=${() => this.resetAll()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Reset Demo</button>
@@ -659,7 +599,7 @@ class App extends Component {
               `)}
             </div>
             <div style="font-size:12px; line-height:1.5; color:oklch(46% 0.012 250); border-top:1px solid oklch(88% 0.012 250); padding-top:14px;">
-              Cases shown here are simulated Wiser support tickets built for this demo. The MONITOR → TRIGGER → ANALYZE → NOTIFY loop above is real logic — NOTIFY calls DeepSeek live to draft each customer update.
+              Cases shown here are simulated Wiser support tickets built for this demo. The MONITOR → TRIGGER → ANALYZE → NOTIFY loop above is real logic — NOTIFY drafts each customer update from the case's state and context.
             </div>
           </div>
         </div>
