@@ -174,11 +174,37 @@ function badgeStyleFor(type) {
 }
 
 // ---------------------------------------------------------------------------
-// DeepSeek — the NOTIFY step drafts the customer update live when a key is set
+// DeepSeek — the NOTIFY step drafts the customer update live.
+// Preferred path: /api/draft serverless proxy (key stays in a Vercel env var).
+// Fallback path: direct browser call with a key pasted into localStorage.
 // ---------------------------------------------------------------------------
-async function draftWithDeepSeek(t, apiKey) {
+function buildPrompt(t) {
   const workNotes = t.workNotes.map(n => `- (${n.time}) ${n.text}`).join('\n');
   const recentActivity = t.activity.slice(0, 4).map(a => `- (${a.time}) ${a.author}: ${a.text}`).join('\n');
+  return {
+    system: "You are ENU Guardian, an automated support agent for Wiser, a contact-center SaaS platform. You draft short, professional, reassuring customer-facing status updates for open support cases so the customer never feels forgotten. Write exactly one paragraph of 60-110 words, plain text only: no subject line, no signature, no markdown, no bullet points. Start with 'Hi {customer} team'. Reference the case number once. Be honest about the current state, concrete about what happens next, and never promise exact dates.",
+    user: `Draft the customer update for this case:\nCase number: ${t.number}\nCustomer: ${t.customer}\nPriority: ${t.priority}\nCurrent state: ${t.state}\nIssue: ${t.shortDescription}\nInternal work notes (do not reveal sensitive internals verbatim):\n${workNotes}\nRecent activity:\n${recentActivity}`
+  };
+}
+
+async function draftViaProxy(t) {
+  const res = await fetch('/api/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildPrompt(t))
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { const j = await res.json(); if (j?.error) detail = j.error; } catch (e) { /* keep HTTP status */ }
+    throw new Error(detail);
+  }
+  const data = await res.json();
+  if (!data?.text) throw new Error('empty completion');
+  return data.text;
+}
+
+async function draftWithDeepSeek(t, apiKey) {
+  const prompt = buildPrompt(t);
   const res = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
@@ -187,14 +213,8 @@ async function draftWithDeepSeek(t, apiKey) {
       temperature: 0.7,
       max_tokens: 300,
       messages: [
-        {
-          role: 'system',
-          content: "You are ENU Guardian, an automated support agent for Wiser, a contact-center SaaS platform. You draft short, professional, reassuring customer-facing status updates for open support cases so the customer never feels forgotten. Write exactly one paragraph of 60-110 words, plain text only: no subject line, no signature, no markdown, no bullet points. Start with 'Hi {customer} team'. Reference the case number once. Be honest about the current state, concrete about what happens next, and never promise exact dates."
-        },
-        {
-          role: 'user',
-          content: `Draft the customer update for this case:\nCase number: ${t.number}\nCustomer: ${t.customer}\nPriority: ${t.priority}\nCurrent state: ${t.state}\nIssue: ${t.shortDescription}\nInternal work notes (do not reveal sensitive internals verbatim):\n${workNotes}\nRecent activity:\n${recentActivity}`
-        }
+        { role: 'system', content: prompt.system },
+        { role: 'user', content: prompt.user }
       ]
     })
   });
@@ -229,12 +249,20 @@ class App extends Component {
       showSettings: false,
       keyDraft: getApiKey(),
       keyStatus: null,
-      hasKey: !!getApiKey()
+      hasKey: !!getApiKey(),
+      serverLive: false
     };
   }
 
   componentDidMount() {
     this.addLog('MONITOR', `ENU Guardian online — watching ${this.state.tickets.length} active Wiser cases.`);
+    // Detect the Vercel serverless proxy; when present, the key stays server-side.
+    fetch('/api/draft').then(r => r.ok ? r.json() : null).then(j => {
+      if (j?.configured) {
+        this.setState({ serverLive: true });
+        this.addLog('MONITOR', 'DeepSeek connected via server — live drafting enabled for NOTIFY.');
+      }
+    }).catch(() => {});
     this._ticks = 0;
     this._interval = setInterval(() => {
       if (this.state.paused) return;
@@ -321,14 +349,23 @@ class App extends Component {
     const t = this.state.tickets.find(x => x.id === ticketId);
     if (!t) return;
     const apiKey = getApiKey();
+    const canDeepSeek = this.state.serverLive || !!apiKey;
     this.updateTicket(ticketId, { agentState: 'notifying' });
-    this.addExecutionStep(ticketId, 'NOTIFY', apiKey
+    this.addExecutionStep(ticketId, 'NOTIFY', canDeepSeek
       ? `Drafting customer-facing update for ${t.number} via DeepSeek...`
       : `Drafting customer-facing update for ${t.number} (template mode — no DeepSeek key set)...`);
     const minDelay = new Promise(r => setTimeout(r, 1100));
     let text = null;
     let source = 'template';
-    if (apiKey) {
+    if (this.state.serverLive) {
+      try {
+        text = await draftViaProxy(t);
+        source = 'deepseek';
+      } catch (err) {
+        this.addLog('NOTIFY', `Server DeepSeek call failed (${err.message}) for ${t.number}.`, ticketId);
+      }
+    }
+    if (!text && apiKey) {
       try {
         text = await draftWithDeepSeek(t, apiKey);
         source = 'deepseek';
@@ -530,10 +567,10 @@ class App extends Component {
           </div>
           <button onClick=${() => this.setState({ showSettings: true, keyDraft: getApiKey(), keyStatus: null })} style=${{
             padding: '9px 16px', borderRadius: '8px', border: '1px solid oklch(82% 0.012 250)',
-            background: this.state.hasKey ? 'oklch(94% 0.04 165)' : 'transparent',
-            color: this.state.hasKey ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
+            background: (this.state.serverLive || this.state.hasKey) ? 'oklch(94% 0.04 165)' : 'transparent',
+            color: (this.state.serverLive || this.state.hasKey) ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
             fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
-          }}>${this.state.hasKey ? 'DeepSeek: Live' : 'DeepSeek: Off'}</button>
+          }}>${this.state.serverLive ? 'DeepSeek: Live (server)' : this.state.hasKey ? 'DeepSeek: Live' : 'DeepSeek: Off'}</button>
           <button onClick=${() => this.setState(s => ({ showInfo: !s.showInfo }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">How it works</button>
           <button onClick=${() => this.setState(s => ({ paused: !s.paused }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:oklch(96% 0.006 250); color:oklch(28% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">${this.state.paused ? 'Resume Demo' : 'Pause Demo'}</button>
           <button onClick=${() => this.resetAll()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Reset Demo</button>
@@ -714,7 +751,9 @@ class App extends Component {
               <button onClick=${() => this.setState({ showSettings: false })} style="background:oklch(95% 0.006 250); border:1px solid oklch(85% 0.012 250); color:oklch(35% 0.012 250); border-radius:8px; width:28px; height:28px; font-size:14px; cursor:pointer; font-family:inherit;">✕</button>
             </div>
             <div style="font-size:13px; line-height:1.5; color:oklch(35% 0.012 250);">
-              Paste a DeepSeek API key to make the NOTIFY step draft each customer update live with <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">deepseek-chat</span>. Without a key, the demo uses built-in template drafts.
+              ${this.state.serverLive
+                ? html`DeepSeek is already connected through the server (the key lives in a Vercel environment variable and never reaches the browser). You don't need to paste anything here.`
+                : html`Paste a DeepSeek API key to make the NOTIFY step draft each customer update live with <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">deepseek-chat</span>. Without a key, the demo uses built-in template drafts. On Vercel, prefer setting the <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">DEEPSEEK_API_KEY</span> environment variable instead — it stays server-side.`}
             </div>
             <input
               type="password"
