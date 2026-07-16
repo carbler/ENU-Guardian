@@ -32,9 +32,6 @@ const html = htm.bind(h);
 // ---------------------------------------------------------------------------
 const BREACH_THRESHOLD_SECONDS = 30;
 const DEMO_SPEED_MULTIPLIER = 1;
-const API_KEY_STORAGE = 'enu_deepseek_api_key';
-
-const getApiKey = () => localStorage.getItem(API_KEY_STORAGE) || '';
 
 // ---------------------------------------------------------------------------
 // Simulated Wiser case data
@@ -174,9 +171,9 @@ function badgeStyleFor(type) {
 }
 
 // ---------------------------------------------------------------------------
-// DeepSeek — the NOTIFY step drafts the customer update live.
-// Preferred path: /api/draft serverless proxy (key stays in a Vercel env var).
-// Fallback path: direct browser call with a key pasted into localStorage.
+// DeepSeek — the NOTIFY step drafts the customer update live through the
+// /api/draft proxy. The API key lives only in the server environment
+// (Vercel env var in production, .env via dev-server.py locally).
 // ---------------------------------------------------------------------------
 function buildPrompt(t) {
   const workNotes = t.workNotes.map(n => `- (${n.time}) ${n.text}`).join('\n');
@@ -203,32 +200,6 @@ async function draftViaProxy(t) {
   return data.text;
 }
 
-async function draftWithDeepSeek(t, apiKey) {
-  const prompt = buildPrompt(t);
-  const res = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      temperature: 0.7,
-      max_tokens: 300,
-      messages: [
-        { role: 'system', content: prompt.system },
-        { role: 'user', content: prompt.user }
-      ]
-    })
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try { const j = await res.json(); if (j?.error?.message) detail = j.error.message; } catch (e) { /* keep HTTP status */ }
-    throw new Error(detail);
-  }
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error('empty completion');
-  return text;
-}
-
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -246,23 +217,23 @@ class App extends Component {
       filterState: 'All',
       filterLogType: 'All',
       showInfo: false,
-      showSettings: false,
-      keyDraft: getApiKey(),
-      keyStatus: null,
-      hasKey: !!getApiKey(),
       serverLive: false
     };
   }
 
   componentDidMount() {
     this.addLog('MONITOR', `ENU Guardian online — watching ${this.state.tickets.length} active Wiser cases.`);
-    // Detect the Vercel serverless proxy; when present, the key stays server-side.
+    // Confirm the DeepSeek proxy is up; the key never reaches the browser.
     fetch('/api/draft').then(r => r.ok ? r.json() : null).then(j => {
       if (j?.configured) {
         this.setState({ serverLive: true });
-        this.addLog('MONITOR', 'DeepSeek connected via server — live drafting enabled for NOTIFY.');
+        this.addLog('MONITOR', 'DeepSeek connected — NOTIFY drafts every customer update live.');
+      } else {
+        this.addLog('MONITOR', 'DeepSeek unavailable — check the DEEP_SEEK_API_KEY server variable.');
       }
-    }).catch(() => {});
+    }).catch(() => {
+      this.addLog('MONITOR', 'DeepSeek unavailable — check the DEEP_SEEK_API_KEY server variable.');
+    });
     this._ticks = 0;
     this._interval = setInterval(() => {
       if (this.state.paused) return;
@@ -348,30 +319,16 @@ class App extends Component {
   async runNotify(ticketId) {
     const t = this.state.tickets.find(x => x.id === ticketId);
     if (!t) return;
-    const apiKey = getApiKey();
-    const canDeepSeek = this.state.serverLive || !!apiKey;
     this.updateTicket(ticketId, { agentState: 'notifying' });
-    this.addExecutionStep(ticketId, 'NOTIFY', canDeepSeek
-      ? `Drafting customer-facing update for ${t.number} via DeepSeek...`
-      : `Drafting customer-facing update for ${t.number} (template mode — no DeepSeek key set)...`);
+    this.addExecutionStep(ticketId, 'NOTIFY', `Drafting customer-facing update for ${t.number} via DeepSeek...`);
     const minDelay = new Promise(r => setTimeout(r, 1100));
     let text = null;
     let source = 'template';
-    if (this.state.serverLive) {
-      try {
-        text = await draftViaProxy(t);
-        source = 'deepseek';
-      } catch (err) {
-        this.addLog('NOTIFY', `Server DeepSeek call failed (${err.message}) for ${t.number}.`, ticketId);
-      }
-    }
-    if (!text && apiKey) {
-      try {
-        text = await draftWithDeepSeek(t, apiKey);
-        source = 'deepseek';
-      } catch (err) {
-        this.addLog('NOTIFY', `DeepSeek call failed (${err.message}) — using template fallback for ${t.number}.`, ticketId);
-      }
+    try {
+      text = await draftViaProxy(t);
+      source = 'deepseek';
+    } catch (err) {
+      this.addLog('NOTIFY', `DeepSeek call failed (${err.message}) — using emergency fallback draft for ${t.number}.`, ticketId);
     }
     await minDelay;
     if (!text) text = (TEMPLATES[t.state] || TEMPLATES['Under Investigation'])(t);
@@ -424,40 +381,6 @@ class App extends Component {
       selectedId: null
     });
     this.addLog('MONITOR', 'Demo reset — ENU Guardian online.');
-  }
-
-  saveApiKey() {
-    const key = (this.state.keyDraft || '').trim();
-    if (key) {
-      localStorage.setItem(API_KEY_STORAGE, key);
-      this.setState({ hasKey: true, keyStatus: { ok: true, text: 'Key saved — NOTIFY will now call DeepSeek live.' } });
-      this.addLog('MONITOR', 'DeepSeek key configured — live drafting enabled for NOTIFY.');
-    } else {
-      localStorage.removeItem(API_KEY_STORAGE);
-      this.setState({ hasKey: false, keyStatus: { ok: true, text: 'Key removed — running in template mode.' } });
-      this.addLog('MONITOR', 'DeepSeek key removed — falling back to template drafting.');
-    }
-  }
-
-  async testApiKey() {
-    const key = (this.state.keyDraft || '').trim();
-    if (!key) { this.setState({ keyStatus: { ok: false, text: 'Paste a key first.' } }); return; }
-    this.setState({ keyStatus: { ok: true, text: 'Testing connection…' } });
-    try {
-      const res = await fetch('https://api.deepseek.com/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
-        body: JSON.stringify({ model: 'deepseek-chat', max_tokens: 4, messages: [{ role: 'user', content: 'ping' }] })
-      });
-      if (!res.ok) {
-        let detail = `HTTP ${res.status}`;
-        try { const j = await res.json(); if (j?.error?.message) detail = j.error.message; } catch (e) { /* keep HTTP status */ }
-        throw new Error(detail);
-      }
-      this.setState({ keyStatus: { ok: true, text: 'Connection OK — DeepSeek responded.' } });
-    } catch (err) {
-      this.setState({ keyStatus: { ok: false, text: `Connection failed: ${err.message}` } });
-    }
   }
 
   render() {
@@ -547,7 +470,6 @@ class App extends Component {
       : { label: 'AGENT RUNNING', bg: 'oklch(94% 0.04 195)', color: 'oklch(42% 0.12 195)', dotAnim: 'enu-dot 1.2s ease-in-out infinite' };
 
     const stopClickPropagation = (e) => e.stopPropagation();
-    const keyStatus = this.state.keyStatus;
 
     return html`
     <div style="height:100vh; background:oklch(97% 0.006 250); color:oklch(22% 0.012 250); font-family:'Inter',system-ui,sans-serif; display:flex; flex-direction:column;">
@@ -565,12 +487,12 @@ class App extends Component {
             <span style=${{ width: '7px', height: '7px', borderRadius: '50%', background: 'currentColor', animation: statusPill.dotAnim }}></span>
             ${statusPill.label}
           </div>
-          <button onClick=${() => this.setState({ showSettings: true, keyDraft: getApiKey(), keyStatus: null })} style=${{
+          <div style=${{
             padding: '9px 16px', borderRadius: '8px', border: '1px solid oklch(82% 0.012 250)',
-            background: (this.state.serverLive || this.state.hasKey) ? 'oklch(94% 0.04 165)' : 'transparent',
-            color: (this.state.serverLive || this.state.hasKey) ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
-            fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
-          }}>${this.state.serverLive ? 'DeepSeek: Live (server)' : this.state.hasKey ? 'DeepSeek: Live' : 'DeepSeek: Off'}</button>
+            background: this.state.serverLive ? 'oklch(94% 0.04 165)' : 'transparent',
+            color: this.state.serverLive ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
+            fontSize: '13px', fontWeight: 600, fontFamily: 'inherit'
+          }}>${this.state.serverLive ? 'DeepSeek: Live' : 'DeepSeek: Connecting…'}</div>
           <button onClick=${() => this.setState(s => ({ showInfo: !s.showInfo }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">How it works</button>
           <button onClick=${() => this.setState(s => ({ paused: !s.paused }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:oklch(96% 0.006 250); color:oklch(28% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">${this.state.paused ? 'Resume Demo' : 'Pause Demo'}</button>
           <button onClick=${() => this.resetAll()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Reset Demo</button>
@@ -737,42 +659,7 @@ class App extends Component {
               `)}
             </div>
             <div style="font-size:12px; line-height:1.5; color:oklch(46% 0.012 250); border-top:1px solid oklch(88% 0.012 250); padding-top:14px;">
-              Cases shown here are simulated Wiser support tickets built for this demo. The MONITOR → TRIGGER → ANALYZE → NOTIFY loop above is real logic; in the deployed hackathon build, NOTIFY calls DeepSeek live to draft each customer update.
-            </div>
-          </div>
-        </div>
-      `}
-
-      ${this.state.showSettings && html`
-        <div onClick=${() => this.setState({ showSettings: false })} style="position:fixed; inset:0; background:rgba(20,24,30,0.4); display:flex; align-items:center; justify-content:center; padding:24px; z-index:70;">
-          <div onClick=${stopClickPropagation} style="width:520px; max-width:100%; background:oklch(100% 0 0); border:1px solid oklch(85% 0.012 250); border-radius:16px; padding:24px; display:flex; flex-direction:column; gap:14px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <div style="font-size:16px; font-weight:800;">DeepSeek connection</div>
-              <button onClick=${() => this.setState({ showSettings: false })} style="background:oklch(95% 0.006 250); border:1px solid oklch(85% 0.012 250); color:oklch(35% 0.012 250); border-radius:8px; width:28px; height:28px; font-size:14px; cursor:pointer; font-family:inherit;">✕</button>
-            </div>
-            <div style="font-size:13px; line-height:1.5; color:oklch(35% 0.012 250);">
-              ${this.state.serverLive
-                ? html`DeepSeek is already connected through the server (the key lives in a Vercel environment variable and never reaches the browser). You don't need to paste anything here.`
-                : html`Paste a DeepSeek API key to make the NOTIFY step draft each customer update live with <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">deepseek-chat</span>. Without a key, the demo uses built-in template drafts. On Vercel, prefer setting the <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">DEEPSEEK_API_KEY</span> environment variable instead — it stays server-side.`}
-            </div>
-            <input
-              type="password"
-              name="deepseek-api-key"
-              placeholder="sk-..."
-              value=${this.state.keyDraft}
-              onInput=${(e) => this.setState({ keyDraft: e.target.value })}
-              style="padding:10px 12px; border-radius:8px; border:1px solid oklch(82% 0.012 250); font-size:13px; font-family:'JetBrains Mono',monospace; outline:none; color:oklch(25% 0.012 250);"
-            />
-            ${keyStatus && html`
-              <div style=${{ fontSize: '12px', fontWeight: 600, color: keyStatus.ok ? 'oklch(42% 0.14 165)' : 'oklch(48% 0.17 25)' }}>${keyStatus.text}</div>
-            `}
-            <div style="display:flex; gap:8px;">
-              <button onClick=${() => this.saveApiKey()} style="padding:9px 16px; border-radius:8px; border:none; background:oklch(46% 0.13 195); color:white; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit;">Save</button>
-              <button onClick=${() => this.testApiKey()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Test connection</button>
-              <button onClick=${() => { this.setState({ keyDraft: '' }, () => this.saveApiKey()); }} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Remove key</button>
-            </div>
-            <div style="font-size:11.5px; line-height:1.5; color:oklch(52% 0.012 250); border-top:1px solid oklch(88% 0.012 250); padding-top:12px;">
-              The key is stored only in this browser (localStorage) and sent directly to api.deepseek.com — there is no backend. For a public demo, use a low-credit throwaway key.
+              Cases shown here are simulated Wiser support tickets built for this demo. The MONITOR → TRIGGER → ANALYZE → NOTIFY loop above is real logic — NOTIFY calls DeepSeek live to draft each customer update.
             </div>
           </div>
         </div>
