@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ENU Guardian — Zero SLA Breaches</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🛡️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: oklch(82% 0.01 250); border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  @keyframes enu-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(210, 60, 60, 0.28); } 50% { box-shadow: 0 0 0 7px rgba(210, 60, 60, 0); } }
+  @keyframes enu-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+  @keyframes enu-fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  a { color: oklch(46% 0.13 195); }
+  a:hover { color: oklch(38% 0.13 195); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { h, render, Component } from 'https://esm.sh/preact@10.25.4';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(h);
+
+// ---------------------------------------------------------------------------
+// Demo configuration
+// ---------------------------------------------------------------------------
+const BREACH_THRESHOLD_SECONDS = 30;
+const DEMO_SPEED_MULTIPLIER = 1;
+const API_KEY_STORAGE = 'enu_deepseek_api_key';
+
+const getApiKey = () => localStorage.getItem(API_KEY_STORAGE) || '';
+
+// ---------------------------------------------------------------------------
+// Simulated Wiser case data
+// ---------------------------------------------------------------------------
+const RAW_TICKETS = [
+  {
+    id: 1, number: 'CS-10412', offset: 22, priority: 'Critical', state: 'Under Investigation',
+    shortDescription: 'Call recordings missing for 340 calls in Support Tier 1 queue',
+    customer: 'Meridian Health Partners',
+    workNotes: [
+      { text: 'Escalated to storage infrastructure team for bucket integrity check.', time: '35m ago' },
+      { text: 'Call metadata intact; audio file objects missing from bucket entirely.', time: '2h ago' },
+      { text: 'Confirmed recordings absent from storage bucket for queue 8842 starting 06:00 UTC.', time: '4h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'Priority escalated to Critical.', time: '3h ago' },
+      { author: 'J. Alvarez', text: 'Assigned to Tier 2 — Call Recording Platform.', time: '5h 40m ago' },
+      { author: 'System', text: 'Ticket created from customer call.', time: '6h ago' }
+    ]
+  },
+  {
+    id: 2, number: 'CS-10419', offset: 40, priority: 'High', state: 'Awaiting Customer Logs',
+    shortDescription: 'IVR misroutes billing calls to sales queue after 5pm',
+    customer: 'Alderbrook Retail Group',
+    workNotes: [
+      { text: 'Requested call flow export from customer to confirm after-hours node config.', time: '50m ago' },
+      { text: 'Reproduced issue in staging when after-hours flag is set.', time: '3h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'State changed to Awaiting Customer Logs.', time: '50m ago' },
+      { author: 'M. Chen', text: 'Assigned to IVR Platform team.', time: '4h ago' },
+      { author: 'System', text: 'Ticket created from customer portal.', time: '5h ago' }
+    ]
+  },
+  {
+    id: 3, number: 'CS-10423', offset: 62, priority: 'Critical', state: 'Fix in Development',
+    shortDescription: 'Agents unable to log in via SSO — login error 403',
+    customer: 'Blue Harbor Insurance',
+    workNotes: [
+      { text: 'Root cause confirmed: expired SAML certificate on identity bridge.', time: '20m ago' },
+      { text: 'Reproduced 403 across 3 test accounts; ruled out client-side cause.', time: '2h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'State changed to Fix in Development.', time: '20m ago' },
+      { author: 'R. Osei', text: 'Root cause identified — cert renewal fix underway.', time: '25m ago' },
+      { author: 'System', text: 'Priority escalated to Critical — 40+ agents affected.', time: '3h ago' }
+    ]
+  },
+  {
+    id: 4, number: 'CS-10430', offset: 88, priority: 'High', state: 'Fix in Validation',
+    shortDescription: 'Webhook delivery failures to Salesforce integration',
+    customer: 'Northgate Logistics',
+    workNotes: [
+      { text: 'Patch deployed to staging; running delivery retries against sandbox org.', time: '15m ago' },
+      { text: 'Identified malformed payload on retry after timeout.', time: '3h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'State changed to Fix in Validation.', time: '15m ago' },
+      { author: 'T. Nakamura', text: 'Fix built, moved to validation queue.', time: '18m ago' },
+      { author: 'System', text: 'Ticket created via integration health alert.', time: '6h ago' }
+    ]
+  },
+  {
+    id: 5, number: 'CS-10437', offset: 125, priority: 'Medium', state: 'Pending Vendor',
+    shortDescription: 'Reporting dashboard load time exceeding 40s for large orgs',
+    customer: 'Union Peak Credit',
+    workNotes: [
+      { text: 'Traced bottleneck to third-party analytics query engine.', time: '1h ago' },
+      { text: 'Opened ticket with analytics vendor for query plan review.', time: '1h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'State changed to Pending Vendor.', time: '1h ago' },
+      { author: 'K. Diallo', text: 'Filed vendor ticket #VN-5521.', time: '1h ago' },
+      { author: 'System', text: 'Ticket created from performance monitoring alert.', time: '8h ago' }
+    ]
+  },
+  {
+    id: 6, number: 'CS-10441', offset: 165, priority: 'Medium', state: 'Under Investigation',
+    shortDescription: 'Voicemail transcription producing garbled text for Spanish calls',
+    customer: 'Rivera & Coates LLP',
+    workNotes: [
+      { text: 'Confirmed language model mismatch for es-MX locale calls.', time: '40m ago' }
+    ],
+    history: [
+      { author: 'S. Byrne', text: 'Assigned to Voice AI team.', time: '2h ago' },
+      { author: 'System', text: 'Ticket created from customer call.', time: '3h ago' }
+    ]
+  },
+  {
+    id: 7, number: 'CS-10448', offset: 210, priority: 'High', state: 'Awaiting Customer Logs',
+    shortDescription: 'Outbound dialer drops connection after 3 rings intermittently',
+    customer: 'Summit Auto Group',
+    workNotes: [
+      { text: 'Requested carrier trunk logs from customer telecom to isolate pattern.', time: '1h ago' },
+      { text: 'Unable to reproduce with current call volume in staging.', time: '4h ago' }
+    ],
+    history: [
+      { author: 'System', text: 'State changed to Awaiting Customer Logs.', time: '1h ago' },
+      { author: 'P. Reyes', text: 'Assigned to Dialer Platform team.', time: '5h ago' },
+      { author: 'System', text: 'Ticket created from customer call.', time: '6h ago' }
+    ]
+  }
+];
+
+// Fallback drafts used when no DeepSeek key is configured or the call fails.
+const TEMPLATES = {
+  'Under Investigation': (t) => `Hi ${t.customer} team — quick update on ${t.number}. Our engineers are actively investigating the issue you reported (${t.shortDescription.toLowerCase()}) and have identified early findings guiding next steps. We know this is impacting your operations and are treating it with priority. We'll continue investigating and follow up as soon as we have concrete findings to share. Thank you for your patience while we work through this.`,
+  'Awaiting Customer Logs': (t) => `Hi ${t.customer} team — update on ${t.number}. We're continuing to work through the issue affecting ${t.shortDescription.toLowerCase()}. A bit more information from your side would help us narrow things down quickly — recent logs or examples are ideal. Once received, we'll be able to move faster toward resolution. We appreciate your partnership here and will keep you posted.`,
+  'Fix in Development': (t) => `Hi ${t.customer} team — good progress on ${t.number}. Our engineering team has pinpointed the root cause of ${t.shortDescription.toLowerCase()} and is actively building a fix. We're being thorough to make sure it holds up before release. We'll let you know as soon as it moves into testing, and we appreciate you sticking with us.`,
+  'Fix in Validation': (t) => `Hi ${t.customer} team — update on ${t.number}. The fix for ${t.shortDescription.toLowerCase()} has been built and is now going through validation to confirm it holds up under real conditions before release. This is one of the last steps before rollout. We'll notify you the moment it's confirmed and scheduled. Thanks again for your patience.`,
+  'Pending Vendor': (t) => `Hi ${t.customer} team — update on ${t.number}. We've traced ${t.shortDescription.toLowerCase()} to a dependency outside our direct control and are actively coordinating with the responsible vendor to move this forward. We're pushing for timely action on their end and monitoring closely. We'll share news as soon as we hear back, and we appreciate your continued patience.`
+};
+
+const PRIORITY_COLORS = {
+  Critical: { bg: 'oklch(94% 0.05 25)', color: 'oklch(46% 0.17 25)' },
+  High: { bg: 'oklch(94% 0.05 75)', color: 'oklch(48% 0.15 75)' },
+  Medium: { bg: 'oklch(94% 0.03 195)', color: 'oklch(45% 0.09 195)' }
+};
+
+const LOG_BADGES = {
+  MONITOR: { bg: 'oklch(94% 0.03 195)', color: 'oklch(45% 0.1 195)' },
+  TRIGGER: { bg: 'oklch(94% 0.05 75)', color: 'oklch(48% 0.15 75)' },
+  ANALYZE: { bg: 'oklch(94% 0.04 300)', color: 'oklch(48% 0.12 300)' },
+  NOTIFY: { bg: 'oklch(94% 0.04 165)', color: 'oklch(42% 0.14 165)' }
+};
+
+function randomBetween(a, b) { return a + Math.random() * (b - a); }
+function formatTime(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+function badgeStyleFor(type) {
+  const c = LOG_BADGES[type] || LOG_BADGES.MONITOR;
+  return { fontSize: '9.5px', fontWeight: 800, letterSpacing: '0.03em', padding: '3px 7px', borderRadius: '5px', background: c.bg, color: c.color, flexShrink: 0, marginTop: '1px' };
+}
+
+// ---------------------------------------------------------------------------
+// DeepSeek — the NOTIFY step drafts the customer update live when a key is set
+// ---------------------------------------------------------------------------
+async function draftWithDeepSeek(t, apiKey) {
+  const workNotes = t.workNotes.map(n => `- (${n.time}) ${n.text}`).join('\n');
+  const recentActivity = t.activity.slice(0, 4).map(a => `- (${a.time}) ${a.author}: ${a.text}`).join('\n');
+  const res = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      temperature: 0.7,
+      max_tokens: 300,
+      messages: [
+        {
+          role: 'system',
+          content: "You are ENU Guardian, an automated support agent for Wiser, a contact-center SaaS platform. You draft short, professional, reassuring customer-facing status updates for open support cases so the customer never feels forgotten. Write exactly one paragraph of 60-110 words, plain text only: no subject line, no signature, no markdown, no bullet points. Start with 'Hi {customer} team'. Reference the case number once. Be honest about the current state, concrete about what happens next, and never promise exact dates."
+        },
+        {
+          role: 'user',
+          content: `Draft the customer update for this case:\nCase number: ${t.number}\nCustomer: ${t.customer}\nPriority: ${t.priority}\nCurrent state: ${t.state}\nIssue: ${t.shortDescription}\nInternal work notes (do not reveal sensitive internals verbatim):\n${workNotes}\nRecent activity:\n${recentActivity}`
+        }
+      ]
+    })
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try { const j = await res.json(); if (j?.error?.message) detail = j.error.message; } catch (e) { /* keep HTTP status */ }
+    throw new Error(detail);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error('empty completion');
+  return text;
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
+class App extends Component {
+  constructor(props) {
+    super(props);
+    this.state = {
+      tickets: this.getInitialTickets(),
+      log: [],
+      metrics: { breaches: 0, updates: 0 },
+      paused: false,
+      selectedId: null,
+      now: Date.now(),
+      filterPriority: 'All',
+      filterState: 'All',
+      filterLogType: 'All',
+      showInfo: false,
+      showSettings: false,
+      keyDraft: getApiKey(),
+      keyStatus: null,
+      hasKey: !!getApiKey()
+    };
+  }
+
+  componentDidMount() {
+    this.addLog('MONITOR', `ENU Guardian online — watching ${this.state.tickets.length} active Wiser cases.`);
+    this._ticks = 0;
+    this._interval = setInterval(() => {
+      if (this.state.paused) return;
+      this._ticks++;
+      this.setState({ now: Date.now() });
+      if (this._ticks % 2 === 0) this.scanTickets();
+    }, 1000);
+  }
+
+  componentWillUnmount() {
+    clearInterval(this._interval);
+  }
+
+  getInitialTickets() {
+    const now = Date.now();
+    return RAW_TICKETS.map(rt => ({
+      ...rt,
+      agentState: 'idle',
+      deadline: now + (rt.offset * 1000) / DEMO_SPEED_MULTIPLIER,
+      activity: rt.history.map(h => ({ ...h })),
+      executionHistory: []
+    }));
+  }
+
+  updateTicket(id, patch) {
+    this.setState(s => ({ tickets: s.tickets.map(t => t.id === id ? { ...t, ...patch } : t) }));
+  }
+
+  addLog(type, text, ticketId = null) {
+    this.setState(s => ({
+      log: [{ id: Date.now() + Math.random(), type, text, ticketId, timeLabel: new Date().toLocaleTimeString([], { hour12: false }) }, ...s.log].slice(0, 40)
+    }));
+  }
+
+  // Logs a step both to the global agent feed AND onto that specific case's own execution history.
+  addExecutionStep(ticketId, type, text) {
+    const timeLabel = new Date().toLocaleTimeString([], { hour12: false });
+    this.addLog(type, text, ticketId);
+    this.setState(s => ({
+      tickets: s.tickets.map(t => t.id === ticketId
+        ? { ...t, executionHistory: [{ type, text, timeLabel }, ...(t.executionHistory || [])] }
+        : t)
+    }));
+  }
+
+  scanTickets() {
+    if (this.state.paused) return;
+    const now = Date.now();
+    const threshold = BREACH_THRESHOLD_SECONDS;
+    let anyTriggered = false;
+    this.state.tickets.forEach(t => {
+      if (t.agentState === 'idle') {
+        const remaining = (t.deadline - now) / 1000;
+        if (remaining <= threshold) {
+          anyTriggered = true;
+          this.updateTicket(t.id, { agentState: 'queued' });
+          this.addExecutionStep(t.id, 'TRIGGER', `${t.number} crossed the ${threshold} min ENU threshold — queued for intervention.`);
+          this.scheduleStep(t.id, 'analyze', 900);
+        }
+      }
+    });
+    if (!anyTriggered && Math.random() < 0.4) {
+      const activeCount = this.state.tickets.filter(t => t.agentState === 'idle').length;
+      this.addLog('MONITOR', `Scanned ${this.state.tickets.length} active Wiser cases — ${activeCount} within SLA.`);
+    }
+  }
+
+  scheduleStep(ticketId, phase, delay) {
+    setTimeout(() => {
+      if (this.state.paused) { this.scheduleStep(ticketId, phase, delay); return; }
+      const t = this.state.tickets.find(x => x.id === ticketId);
+      if (!t) return;
+      if (phase === 'analyze') {
+        this.updateTicket(ticketId, { agentState: 'analyzing' });
+        this.addExecutionStep(ticketId, 'ANALYZE', `Gathering context for ${t.number} — case state, work notes, recent activity.`);
+        this.scheduleStep(ticketId, 'notify', 1300);
+      } else if (phase === 'notify') {
+        this.runNotify(ticketId);
+      }
+    }, delay);
+  }
+
+  async runNotify(ticketId) {
+    const t = this.state.tickets.find(x => x.id === ticketId);
+    if (!t) return;
+    const apiKey = getApiKey();
+    this.updateTicket(ticketId, { agentState: 'notifying' });
+    this.addExecutionStep(ticketId, 'NOTIFY', apiKey
+      ? `Drafting customer-facing update for ${t.number} via DeepSeek...`
+      : `Drafting customer-facing update for ${t.number} (template mode — no DeepSeek key set)...`);
+    const minDelay = new Promise(r => setTimeout(r, 1100));
+    let text = null;
+    let source = 'template';
+    if (apiKey) {
+      try {
+        text = await draftWithDeepSeek(t, apiKey);
+        source = 'deepseek';
+      } catch (err) {
+        this.addLog('NOTIFY', `DeepSeek call failed (${err.message}) — using template fallback for ${t.number}.`, ticketId);
+      }
+    }
+    await minDelay;
+    if (!text) text = (TEMPLATES[t.state] || TEMPLATES['Under Investigation'])(t);
+    this.postUpdate(ticketId, text, source);
+  }
+
+  postUpdate(ticketId, text, source) {
+    if (this.state.paused) { setTimeout(() => this.postUpdate(ticketId, text, source), 500); return; }
+    const t = this.state.tickets.find(x => x.id === ticketId);
+    if (!t) return;
+    const entryId = Date.now() + Math.random();
+    const entry = { id: entryId, author: 'ENU Guardian (automated)', text, time: 'just now', isAgent: true, entering: true };
+    const newDeadline = Date.now() + (randomBetween(60, 240) * 1000) / DEMO_SPEED_MULTIPLIER;
+    this.updateTicket(ticketId, {
+      agentState: 'idle',
+      deadline: newDeadline,
+      activity: [entry, ...t.activity]
+    });
+    this.addExecutionStep(ticketId, 'NOTIFY', source === 'deepseek'
+      ? `Posted DeepSeek-drafted update to ${t.number} activity stream — ENU timer reset.`
+      : `Posted automated update to ${t.number} activity stream — ENU timer reset.`);
+    this.setState(s => ({ metrics: { breaches: s.metrics.breaches + 1, updates: s.metrics.updates + 1 } }));
+    setTimeout(() => {
+      this.setState(s => ({
+        tickets: s.tickets.map(x => x.id === ticketId
+          ? { ...x, activity: x.activity.map(a => a.id === entryId ? { ...a, entering: false } : a) }
+          : x)
+      }));
+    }, 60);
+  }
+
+  pillStyle(active) {
+    return {
+      padding: '5px 10px', borderRadius: '14px', fontSize: '11px', fontWeight: 700,
+      border: active ? '1px solid oklch(55% 0.12 195)' : '1px solid oklch(85% 0.012 250)',
+      background: active ? 'oklch(94% 0.04 195)' : 'transparent',
+      color: active ? 'oklch(42% 0.12 195)' : 'oklch(50% 0.012 250)',
+      cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0
+    };
+  }
+
+  selectTicket(id) { this.setState({ selectedId: id }); }
+
+  resetAll() {
+    this.setState({
+      tickets: this.getInitialTickets(),
+      log: [],
+      metrics: { breaches: 0, updates: 0 },
+      paused: false,
+      selectedId: null
+    });
+    this.addLog('MONITOR', 'Demo reset — ENU Guardian online.');
+  }
+
+  saveApiKey() {
+    const key = (this.state.keyDraft || '').trim();
+    if (key) {
+      localStorage.setItem(API_KEY_STORAGE, key);
+      this.setState({ hasKey: true, keyStatus: { ok: true, text: 'Key saved — NOTIFY will now call DeepSeek live.' } });
+      this.addLog('MONITOR', 'DeepSeek key configured — live drafting enabled for NOTIFY.');
+    } else {
+      localStorage.removeItem(API_KEY_STORAGE);
+      this.setState({ hasKey: false, keyStatus: { ok: true, text: 'Key removed — running in template mode.' } });
+      this.addLog('MONITOR', 'DeepSeek key removed — falling back to template drafting.');
+    }
+  }
+
+  async testApiKey() {
+    const key = (this.state.keyDraft || '').trim();
+    if (!key) { this.setState({ keyStatus: { ok: false, text: 'Paste a key first.' } }); return; }
+    this.setState({ keyStatus: { ok: true, text: 'Testing connection…' } });
+    try {
+      const res = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+        body: JSON.stringify({ model: 'deepseek-chat', max_tokens: 4, messages: [{ role: 'user', content: 'ping' }] })
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try { const j = await res.json(); if (j?.error?.message) detail = j.error.message; } catch (e) { /* keep HTTP status */ }
+        throw new Error(detail);
+      }
+      this.setState({ keyStatus: { ok: true, text: 'Connection OK — DeepSeek responded.' } });
+    } catch (err) {
+      this.setState({ keyStatus: { ok: false, text: `Connection failed: ${err.message}` } });
+    }
+  }
+
+  render() {
+    const now = this.state.now;
+    const threshold = BREACH_THRESHOLD_SECONDS;
+
+    const priorityList = ['All', 'Critical', 'High', 'Medium'];
+    const stateOptions = ['All', 'Under Investigation', 'Awaiting Customer Logs', 'Fix in Development', 'Fix in Validation', 'Pending Vendor'];
+    const logTypeList = ['All', 'MONITOR', 'TRIGGER', 'ANALYZE', 'NOTIFY'];
+
+    let filteredTickets = this.state.tickets;
+    if (this.state.filterPriority !== 'All') filteredTickets = filteredTickets.filter(t => t.priority === this.state.filterPriority);
+    if (this.state.filterState !== 'All') filteredTickets = filteredTickets.filter(t => t.state === this.state.filterState);
+
+    const ticketsView = filteredTickets.map(t => {
+      const remaining = (t.deadline - now) / 1000;
+      const active = t.agentState === 'analyzing' || t.agentState === 'notifying';
+      let status = 'healthy';
+      if (active || remaining <= 10) status = 'critical';
+      else if (remaining <= threshold) status = 'warning';
+
+      const statusColors = {
+        healthy: { border: 'oklch(85% 0.012 250)', text: 'oklch(42% 0.07 195)' },
+        warning: { border: 'oklch(65% 0.14 75)', text: 'oklch(50% 0.15 75)' },
+        critical: { border: 'oklch(58% 0.18 25)', text: 'oklch(50% 0.18 25)' }
+      }[status];
+
+      const agentTagMap = {
+        queued: ['Queued for intervention', 'oklch(50% 0.15 75)'],
+        analyzing: ['Agent analyzing…', 'oklch(48% 0.12 300)'],
+        notifying: ['Agent notifying customer…', 'oklch(42% 0.14 165)']
+      };
+      const tag = agentTagMap[t.agentState];
+      const pc = PRIORITY_COLORS[t.priority] || PRIORITY_COLORS.Medium;
+
+      return html`
+        <div key=${t.id} onClick=${() => this.selectTicket(t.id)} style=${{
+          background: 'oklch(100% 0 0)',
+          border: `1.5px solid ${statusColors.border}`,
+          borderRadius: '12px',
+          padding: '16px',
+          cursor: 'pointer',
+          transition: 'border-color 0.3s',
+          boxShadow: '0 1px 2px rgba(20,24,30,0.04)',
+          animation: status === 'critical' ? 'enu-pulse 1.4s ease-in-out infinite' : 'none'
+        }}>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:9px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:11.5px; color:oklch(50% 0.012 250); font-weight:600;">WISER · ${t.number}</span>
+            <span style=${{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', background: pc.bg, color: pc.color }}>${t.priority}</span>
+          </div>
+          <div style="font-size:14.5px; font-weight:600; line-height:1.35; margin-bottom:6px;">${t.shortDescription}</div>
+          <div style="font-size:12.5px; color:oklch(50% 0.012 250); margin-bottom:16px;">${t.customer}</div>
+          <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+            <div>
+              <div style="font-size:10.5px; color:oklch(56% 0.012 250); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:5px;">${t.state}</div>
+              ${tag && html`
+                <div style=${{ fontSize: '11.5px', fontWeight: 700, color: tag[1], display: 'flex', alignItems: 'center' }}>
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:currentColor; margin-right:5px; animation:enu-dot 1s ease-in-out infinite;"></span>${tag[0]}
+                </div>
+              `}
+            </div>
+            <div style="text-align:right;">
+              <div style=${{ fontFamily: "'JetBrains Mono',monospace", fontSize: '22px', fontWeight: 700, color: statusColors.text, lineHeight: 1 }}>${formatTime(remaining)}</div>
+              <div style="font-size:9.5px; color:oklch(58% 0.012 250); margin-top:2px;">until ENU breach</div>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+
+    const selected = this.state.selectedId ? this.state.tickets.find(t => t.id === this.state.selectedId) : null;
+    const selectedPc = selected ? (PRIORITY_COLORS[selected.priority] || PRIORITY_COLORS.Medium) : null;
+    const execHistory = selected ? (selected.executionHistory || []) : [];
+
+    let filteredLog = this.state.log;
+    if (this.state.filterLogType !== 'All') filteredLog = filteredLog.filter(e => e.type === this.state.filterLogType);
+
+    const infoSteps = [
+      { label: 'MONITOR', desc: 'Every few seconds the agent scans all active Wiser cases and reads their live ENU timers.' },
+      { label: 'TRIGGER', desc: "When a timer drops below the configured threshold and no recent update exists, the case enters the agent's queue." },
+      { label: 'ANALYZE', desc: "The agent gathers the case's state, work notes, and recent activity for context." },
+      { label: 'NOTIFY', desc: 'A concise, professional customer update is generated and posted to the activity stream, and the ENU timer resets.' }
+    ];
+
+    const statusPill = this.state.paused
+      ? { label: 'PAUSED', bg: 'oklch(93% 0.006 250)', color: 'oklch(46% 0.012 250)', dotAnim: 'none' }
+      : { label: 'AGENT RUNNING', bg: 'oklch(94% 0.04 195)', color: 'oklch(42% 0.12 195)', dotAnim: 'enu-dot 1.2s ease-in-out infinite' };
+
+    const stopClickPropagation = (e) => e.stopPropagation();
+    const keyStatus = this.state.keyStatus;
+
+    return html`
+    <div style="height:100vh; background:oklch(97% 0.006 250); color:oklch(22% 0.012 250); font-family:'Inter',system-ui,sans-serif; display:flex; flex-direction:column;">
+
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 32px; background:oklch(100% 0 0); border-bottom:1px solid oklch(88% 0.012 250); flex-shrink:0;">
+        <div>
+          <div style="display:flex; align-items:baseline; gap:10px;">
+            <h1 style="margin:0; font-size:23px; font-weight:800; letter-spacing:-0.01em;">ENU Guardian</h1>
+            <span style="font-size:12.5px; color:oklch(46% 0.13 195); font-weight:700; text-transform:uppercase; letter-spacing:0.05em;">Zero SLA Breaches</span>
+          </div>
+          <div style="font-size:13px; color:oklch(46% 0.012 250); margin-top:4px;">Autonomous agent monitoring ENU timers on simulated Wiser support cases — intervening before customers ever notice.</div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div style=${{ display: 'flex', alignItems: 'center', gap: '7px', fontSize: '11.5px', fontWeight: 700, letterSpacing: '0.03em', padding: '6px 12px', borderRadius: '20px', background: statusPill.bg, color: statusPill.color }}>
+            <span style=${{ width: '7px', height: '7px', borderRadius: '50%', background: 'currentColor', animation: statusPill.dotAnim }}></span>
+            ${statusPill.label}
+          </div>
+          <button onClick=${() => this.setState({ showSettings: true, keyDraft: getApiKey(), keyStatus: null })} style=${{
+            padding: '9px 16px', borderRadius: '8px', border: '1px solid oklch(82% 0.012 250)',
+            background: this.state.hasKey ? 'oklch(94% 0.04 165)' : 'transparent',
+            color: this.state.hasKey ? 'oklch(42% 0.14 165)' : 'oklch(50% 0.012 250)',
+            fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit'
+          }}>${this.state.hasKey ? 'DeepSeek: Live' : 'DeepSeek: Off'}</button>
+          <button onClick=${() => this.setState(s => ({ showInfo: !s.showInfo }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">How it works</button>
+          <button onClick=${() => this.setState(s => ({ paused: !s.paused }))} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:oklch(96% 0.006 250); color:oklch(28% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">${this.state.paused ? 'Resume Demo' : 'Pause Demo'}</button>
+          <button onClick=${() => this.resetAll()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Reset Demo</button>
+        </div>
+      </div>
+
+      <div style="display:flex; flex:1; gap:20px; padding:22px 32px; overflow:hidden;">
+
+        <div style="flex:1.7; display:flex; flex-direction:column; overflow:hidden;">
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:12px; flex-shrink:0;">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span style="font-size:13.5px; font-weight:700;">Wiser Case Queue</span>
+              <span style="font-size:9.5px; font-weight:800; letter-spacing:0.04em; padding:3px 7px; border-radius:5px; background:oklch(92% 0.008 250); color:oklch(52% 0.012 250);">SIMULATED</span>
+            </div>
+            <div style="display:flex; align-items:center; gap:7px; flex-wrap:wrap;">
+              ${priorityList.map(p => html`
+                <button key=${p} onClick=${() => this.setState({ filterPriority: p })} style=${this.pillStyle(p === this.state.filterPriority)}>${p}</button>
+              `)}
+              <select value=${this.state.filterState} onChange=${(e) => this.setState({ filterState: e.target.value })} style="padding:5px 9px; border-radius:14px; font-size:11px; font-weight:700; border:1px solid oklch(85% 0.012 250); background:oklch(100% 0 0); color:oklch(46% 0.012 250); font-family:inherit; cursor:pointer;">
+                ${stateOptions.map(opt => html`<option key=${opt} value=${opt}>${opt}</option>`)}
+              </select>
+            </div>
+          </div>
+          <div style="flex:1; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; align-content:start; padding:2px 4px 12px 2px;">
+            ${ticketsView}
+          </div>
+        </div>
+
+        <div style="flex:1; min-width:310px; max-width:380px; display:flex; flex-direction:column; gap:14px; overflow:hidden;">
+
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:9px; flex-shrink:0;">
+            <div style="background:oklch(100% 0 0); border:1px solid oklch(88% 0.012 250); border-radius:11px; padding:12px 10px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:700; color:oklch(44% 0.14 165);">${this.state.metrics.breaches}</div>
+              <div style="font-size:10px; color:oklch(52% 0.012 250); margin-top:4px; line-height:1.25;">SLA Breaches Prevented</div>
+            </div>
+            <div style="background:oklch(100% 0 0); border:1px solid oklch(88% 0.012 250); border-radius:11px; padding:12px 10px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:700; color:oklch(46% 0.13 195);">${this.state.metrics.updates}</div>
+              <div style="font-size:10px; color:oklch(52% 0.012 250); margin-top:4px; line-height:1.25;">Updates Sent</div>
+            </div>
+            <div style="background:oklch(100% 0 0); border:1px solid oklch(88% 0.012 250); border-radius:11px; padding:12px 10px;">
+              <div style="font-family:'JetBrains Mono',monospace; font-size:24px; font-weight:700; color:oklch(50% 0.15 75);">${this.state.metrics.updates * 7}</div>
+              <div style="font-size:10px; color:oklch(52% 0.012 250); margin-top:4px; line-height:1.25;">Est. Engineer Min. Saved</div>
+            </div>
+          </div>
+
+          <div style="flex:1; display:flex; flex-direction:column; background:oklch(100% 0 0); border:1px solid oklch(88% 0.012 250); border-radius:12px; overflow:hidden; min-height:0;">
+            <div style="padding:13px 16px 8px; border-bottom:1px solid oklch(88% 0.012 250); flex-shrink:0;">
+              <div style="font-size:12.5px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; color:oklch(46% 0.012 250); margin-bottom:9px;">Agent Activity</div>
+              <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                ${logTypeList.map(tp => html`
+                  <button key=${tp} onClick=${() => this.setState({ filterLogType: tp })} style=${this.pillStyle(tp === this.state.filterLogType)}>${tp}</button>
+                `)}
+              </div>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding:12px 14px; display:flex; flex-direction:column; gap:10px;">
+              ${filteredLog.map(e => {
+                const relatedTicket = e.ticketId ? this.state.tickets.find(x => x.id === e.ticketId) : null;
+                return html`
+                  <div key=${e.id} style="display:flex; gap:8px; font-size:12px; align-items:flex-start;">
+                    <span style=${badgeStyleFor(e.type)}>${e.type}</span>
+                    <div style="flex:1; min-width:0;">
+                      <div style="color:oklch(30% 0.012 250); line-height:1.35;">${e.text}</div>
+                      <div style="display:flex; align-items:center; gap:10px; margin-top:3px;">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:oklch(58% 0.012 250);">${e.timeLabel}</span>
+                        ${relatedTicket && html`
+                          <span onClick=${() => this.selectTicket(relatedTicket.id)} style="font-size:10.5px; font-weight:700; color:oklch(46% 0.13 195); cursor:pointer;">View ${relatedTicket.number} →</span>
+                        `}
+                      </div>
+                    </div>
+                  </div>
+                `;
+              })}
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      ${selected && html`
+        <div onClick=${() => this.setState({ selectedId: null })} style="position:fixed; inset:0; background:rgba(20,24,30,0.4); display:flex; align-items:center; justify-content:center; padding:24px; z-index:50;">
+          <div onClick=${stopClickPropagation} style="width:660px; max-width:100%; max-height:86vh; display:flex; flex-direction:column; background:oklch(100% 0 0); border:1px solid oklch(85% 0.012 250); border-radius:16px; overflow:hidden;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; padding:20px 22px; border-bottom:1px solid oklch(88% 0.012 250); flex-shrink:0;">
+              <div>
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:6px;">
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12.5px; color:oklch(48% 0.012 250); font-weight:600;">WISER · ${selected.number}</span>
+                  <span style=${{ padding: '3px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', background: selectedPc.bg, color: selectedPc.color }}>${selected.priority}</span>
+                </div>
+                <div style="font-size:16px; font-weight:700; line-height:1.3;">${selected.shortDescription}</div>
+                <div style="font-size:12.5px; color:oklch(50% 0.012 250); margin-top:5px;">${selected.customer} · ${selected.state}</div>
+              </div>
+              <button onClick=${() => this.setState({ selectedId: null })} style="background:oklch(95% 0.006 250); border:1px solid oklch(85% 0.012 250); color:oklch(35% 0.012 250); border-radius:8px; width:30px; height:30px; font-size:15px; cursor:pointer; flex-shrink:0; font-family:inherit;">✕</button>
+            </div>
+
+            <div style="flex:1; overflow-y:auto; padding:20px 22px; display:flex; flex-direction:column; gap:22px;">
+              <div>
+                <div style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:oklch(50% 0.012 250); margin-bottom:10px;">Execution History</div>
+                ${execHistory.length > 0 ? html`
+                  <div style="display:flex; flex-direction:column; gap:9px;">
+                    ${execHistory.map((step, i) => html`
+                      <div key=${i} style="display:flex; gap:8px; font-size:12.5px; align-items:flex-start;">
+                        <span style=${badgeStyleFor(step.type)}>${step.type}</span>
+                        <div style="flex:1;">
+                          <div style="color:oklch(30% 0.012 250); line-height:1.4;">${step.text}</div>
+                          <div style="font-family:'JetBrains Mono',monospace; font-size:10px; color:oklch(58% 0.012 250); margin-top:2px;">${step.timeLabel}</div>
+                        </div>
+                      </div>
+                    `)}
+                  </div>
+                ` : html`
+                  <div style="font-size:12.5px; color:oklch(58% 0.012 250); font-style:italic;">No agent action yet on this case — still within its SLA window.</div>
+                `}
+              </div>
+
+              <div>
+                <div style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:oklch(50% 0.012 250); margin-bottom:10px;">Work Notes</div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                  ${selected.workNotes.map((note, i) => html`
+                    <div key=${i} style="font-size:13px; line-height:1.45; border-left:2px solid oklch(85% 0.012 250); padding-left:12px;">
+                      <div style="color:oklch(30% 0.012 250);">${note.text}</div>
+                      <div style="font-family:'JetBrains Mono',monospace; font-size:10.5px; color:oklch(58% 0.012 250); margin-top:3px;">${note.time}</div>
+                    </div>
+                  `)}
+                </div>
+              </div>
+
+              <div>
+                <div style="font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; color:oklch(50% 0.012 250); margin-bottom:10px;">Activity Stream</div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                  ${selected.activity.map((entry, i) => html`
+                    <div key=${entry.id || `h${i}`} style=${{
+                      borderLeft: entry.isAgent ? '2px solid oklch(55% 0.12 165)' : '2px solid oklch(85% 0.012 250)',
+                      paddingLeft: '12px',
+                      opacity: entry.entering ? 0 : 1,
+                      transform: entry.entering ? 'translateY(6px)' : 'translateY(0)',
+                      transition: 'opacity 0.4s ease, transform 0.4s ease'
+                    }}>
+                      <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom:4px;">
+                        <span style=${{ fontSize: '11.5px', fontWeight: 700, color: entry.isAgent ? 'oklch(42% 0.14 165)' : 'oklch(46% 0.012 250)' }}>${entry.author}</span>
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:10px; color:oklch(58% 0.012 250); flex-shrink:0;">${entry.time}</span>
+                      </div>
+                      <div style="font-size:13px; line-height:1.5; color:oklch(30% 0.012 250);">${entry.text}</div>
+                    </div>
+                  `)}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `}
+
+      ${this.state.showInfo && html`
+        <div onClick=${() => this.setState({ showInfo: false })} style="position:fixed; inset:0; background:rgba(20,24,30,0.4); display:flex; align-items:center; justify-content:center; padding:24px; z-index:60;">
+          <div onClick=${stopClickPropagation} style="width:520px; max-width:100%; background:oklch(100% 0 0); border:1px solid oklch(85% 0.012 250); border-radius:16px; padding:24px; display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:16px; font-weight:800;">How ENU Guardian works</div>
+              <button onClick=${() => this.setState({ showInfo: false })} style="background:oklch(95% 0.006 250); border:1px solid oklch(85% 0.012 250); color:oklch(35% 0.012 250); border-radius:8px; width:28px; height:28px; font-size:14px; cursor:pointer; font-family:inherit;">✕</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+              ${infoSteps.map(step => html`
+                <div key=${step.label} style="display:flex; gap:12px; align-items:flex-start;">
+                  <span style=${badgeStyleFor(step.label)}>${step.label}</span>
+                  <div style="font-size:13px; line-height:1.45; color:oklch(30% 0.012 250);">${step.desc}</div>
+                </div>
+              `)}
+            </div>
+            <div style="font-size:12px; line-height:1.5; color:oklch(46% 0.012 250); border-top:1px solid oklch(88% 0.012 250); padding-top:14px;">
+              Cases shown here are simulated Wiser support tickets built for this demo. The MONITOR → TRIGGER → ANALYZE → NOTIFY loop above is real logic; in the deployed hackathon build, NOTIFY calls DeepSeek live to draft each customer update.
+            </div>
+          </div>
+        </div>
+      `}
+
+      ${this.state.showSettings && html`
+        <div onClick=${() => this.setState({ showSettings: false })} style="position:fixed; inset:0; background:rgba(20,24,30,0.4); display:flex; align-items:center; justify-content:center; padding:24px; z-index:70;">
+          <div onClick=${stopClickPropagation} style="width:520px; max-width:100%; background:oklch(100% 0 0); border:1px solid oklch(85% 0.012 250); border-radius:16px; padding:24px; display:flex; flex-direction:column; gap:14px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <div style="font-size:16px; font-weight:800;">DeepSeek connection</div>
+              <button onClick=${() => this.setState({ showSettings: false })} style="background:oklch(95% 0.006 250); border:1px solid oklch(85% 0.012 250); color:oklch(35% 0.012 250); border-radius:8px; width:28px; height:28px; font-size:14px; cursor:pointer; font-family:inherit;">✕</button>
+            </div>
+            <div style="font-size:13px; line-height:1.5; color:oklch(35% 0.012 250);">
+              Paste a DeepSeek API key to make the NOTIFY step draft each customer update live with <span style="font-family:'JetBrains Mono',monospace; font-size:12px;">deepseek-chat</span>. Without a key, the demo uses built-in template drafts.
+            </div>
+            <input
+              type="password"
+              name="deepseek-api-key"
+              placeholder="sk-..."
+              value=${this.state.keyDraft}
+              onInput=${(e) => this.setState({ keyDraft: e.target.value })}
+              style="padding:10px 12px; border-radius:8px; border:1px solid oklch(82% 0.012 250); font-size:13px; font-family:'JetBrains Mono',monospace; outline:none; color:oklch(25% 0.012 250);"
+            />
+            ${keyStatus && html`
+              <div style=${{ fontSize: '12px', fontWeight: 600, color: keyStatus.ok ? 'oklch(42% 0.14 165)' : 'oklch(48% 0.17 25)' }}>${keyStatus.text}</div>
+            `}
+            <div style="display:flex; gap:8px;">
+              <button onClick=${() => this.saveApiKey()} style="padding:9px 16px; border-radius:8px; border:none; background:oklch(46% 0.13 195); color:white; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit;">Save</button>
+              <button onClick=${() => this.testApiKey()} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(46% 0.13 195); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Test connection</button>
+              <button onClick=${() => { this.setState({ keyDraft: '' }, () => this.saveApiKey()); }} style="padding:9px 16px; border-radius:8px; border:1px solid oklch(82% 0.012 250); background:transparent; color:oklch(50% 0.012 250); font-size:13px; font-weight:600; cursor:pointer; font-family:inherit;">Remove key</button>
+            </div>
+            <div style="font-size:11.5px; line-height:1.5; color:oklch(52% 0.012 250); border-top:1px solid oklch(88% 0.012 250); padding-top:12px;">
+              The key is stored only in this browser (localStorage) and sent directly to api.deepseek.com — there is no backend. For a public demo, use a low-credit throwaway key.
+            </div>
+          </div>
+        </div>
+      `}
+
+    </div>
+    `;
+  }
+}
+
+render(html`<${App} />`, document.getElementById('app'));
+</script>
+</body>
+</html>
